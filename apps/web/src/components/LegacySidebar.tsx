@@ -475,6 +475,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   // user's own machine, so the cloud icon is misleading, label it "Local" and
   // suppress the cloud icon (the project header already shows a
   // local-environment icon for desktop-local projects, see sidebarProjectGrouping).
+  // The flat list has no project headers, so its rows keep the icon.
   const isDesktopLocalThread =
     environment !== null && isDesktopLocalConnectionTarget(environment.entry.target);
   const threadEnvironmentLabel = isRemoteThread
@@ -956,7 +957,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             ) : null}
             <span className={threadMetaClassName}>
               <span className="inline-flex items-center gap-1">
-                {isRemoteThread && !isDesktopLocalThread && (
+                {isRemoteThread && (!isDesktopLocalThread || project !== null) && (
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -3084,6 +3085,11 @@ function SortableProjectItem({
   );
 }
 
+/** The flat list's "New thread" button: pick the project in the command palette. */
+function openNewThreadInCommandPalette() {
+  openCommandPalette({ open: "new-thread-in" });
+}
+
 /** Key for the flat list's "Show more" state among the per-project ones. */
 const LEGACY_FLAT_THREAD_LIST_KEY = "legacy-sidebar:flat-thread-list";
 type LegacyFlatThreadList = ReturnType<typeof resolveLegacyFlatThreadList<SidebarThreadSummary>>;
@@ -3415,6 +3421,24 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               onThreadSortOrderChange={handleThreadSortOrderChange}
               onThreadPreviewCountChange={handleThreadPreviewCountChange}
             />
+            {/* Project headers carry the new-thread buttons; the flat list has none. */}
+            {threadsGroupedByProject ? null : (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="ghost-muted"
+                      aria-label="New thread"
+                      onClick={openNewThreadInCommandPalette}
+                    />
+                  }
+                >
+                  <SquarePenIcon className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup side="right">New thread</TooltipPopup>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger
                 render={
