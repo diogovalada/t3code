@@ -28,6 +28,7 @@ import {
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   reduceSidebarProjectScopeMenuState,
+  resolveLegacyFlatThreadList,
   resolveAdjacentThreadId,
   resolveProjectStatusIndicator,
   resolveSidebarSweepKeys,
@@ -2336,5 +2337,80 @@ describe("Working shelf (beta)", () => {
         unsnooze: false,
       });
     });
+  });
+});
+
+describe("resolveLegacyFlatThreadList", () => {
+  const flatThread = (
+    id: string,
+    input: { createdAt: string; latestUserMessageAt: string; archivedAt?: string },
+  ) => ({
+    id,
+    createdAt: input.createdAt,
+    updatedAt: input.latestUserMessageAt,
+    latestUserMessageAt: input.latestUserMessageAt,
+    archivedAt: input.archivedAt ?? null,
+  });
+  const threads = [
+    flatThread("old-but-active", {
+      createdAt: "2026-01-01T00:00:00.000Z",
+      latestUserMessageAt: "2026-01-09T00:00:00.000Z",
+    }),
+    flatThread("newest-created", {
+      createdAt: "2026-01-05T00:00:00.000Z",
+      latestUserMessageAt: "2026-01-06T00:00:00.000Z",
+    }),
+    flatThread("archived", {
+      createdAt: "2026-01-08T00:00:00.000Z",
+      latestUserMessageAt: "2026-01-10T00:00:00.000Z",
+      archivedAt: "2026-01-10T00:00:00.000Z",
+    }),
+    flatThread("middle", {
+      createdAt: "2026-01-03T00:00:00.000Z",
+      latestUserMessageAt: "2026-01-07T00:00:00.000Z",
+    }),
+  ];
+  const ids = (list: ReadonlyArray<{ readonly id: string }>) => list.map((thread) => thread.id);
+
+  it("lists unarchived threads from every project by latest user message", () => {
+    const result = resolveLegacyFlatThreadList({
+      threads,
+      sortOrder: "updated_at",
+      expanded: false,
+    });
+    expect(ids(result.orderedThreads)).toEqual(["old-but-active", "middle", "newest-created"]);
+    expect(ids(result.renderedThreads)).toEqual(ids(result.orderedThreads));
+    expect(result.hasOverflowingThreads).toBe(false);
+  });
+
+  it("follows the creation-time thread sort", () => {
+    const result = resolveLegacyFlatThreadList({
+      threads,
+      sortOrder: "created_at",
+      expanded: false,
+    });
+    expect(ids(result.orderedThreads)).toEqual(["newest-created", "middle", "old-but-active"]);
+  });
+
+  it("shows the first page until expanded, keeping overflow for Show less", () => {
+    const collapsed = resolveLegacyFlatThreadList({
+      threads,
+      sortOrder: "updated_at",
+      expanded: false,
+      previewCount: 2,
+    });
+    expect(ids(collapsed.renderedThreads)).toEqual(["old-but-active", "middle"]);
+    expect(ids(collapsed.hiddenThreads)).toEqual(["newest-created"]);
+    expect(collapsed.hasOverflowingThreads).toBe(true);
+
+    const expanded = resolveLegacyFlatThreadList({
+      threads,
+      sortOrder: "updated_at",
+      expanded: true,
+      previewCount: 2,
+    });
+    expect(ids(expanded.renderedThreads)).toEqual(["old-but-active", "middle", "newest-created"]);
+    expect(expanded.hiddenThreads).toEqual([]);
+    expect(expanded.hasOverflowingThreads).toBe(true);
   });
 });

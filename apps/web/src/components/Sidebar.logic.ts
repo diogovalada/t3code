@@ -1455,3 +1455,46 @@ export function sortScopedProjectsForSidebar<
       left.id.localeCompare(right.id),
   );
 }
+
+/** Rows the legacy sidebar's flat thread list shows before "Show more". */
+export const LEGACY_FLAT_THREAD_PREVIEW_COUNT = 20;
+
+/**
+ * The legacy sidebar's ungrouped view: every unarchived thread in one list, in
+ * the thread sort order. Like a project's thread list, it shows the first page
+ * until the user expands it.
+ */
+export function resolveLegacyFlatThreadList<
+  T extends { readonly id: string; readonly archivedAt: string | null } & ThreadSortInput,
+>(input: {
+  readonly threads: readonly T[];
+  readonly sortOrder: SidebarThreadSortOrder;
+  readonly expanded: boolean;
+  readonly previewCount?: number;
+}): {
+  readonly orderedThreads: readonly T[];
+  readonly renderedThreads: readonly T[];
+  readonly hiddenThreads: readonly T[];
+  readonly hasOverflowingThreads: boolean;
+} {
+  const previewCount = input.previewCount ?? LEGACY_FLAT_THREAD_PREVIEW_COUNT;
+  const orderedThreads = sortThreads(
+    input.threads.filter((thread) => thread.archivedAt === null),
+    input.sortOrder,
+  );
+  const hasOverflowingThreads = orderedThreads.length > previewCount;
+  if (input.expanded || !hasOverflowingThreads) {
+    return {
+      orderedThreads,
+      renderedThreads: orderedThreads,
+      hiddenThreads: [],
+      hasOverflowingThreads,
+    };
+  }
+  return {
+    orderedThreads,
+    renderedThreads: orderedThreads.slice(0, previewCount),
+    hiddenThreads: orderedThreads.slice(previewCount),
+    hasOverflowingThreads,
+  };
+}

@@ -26,7 +26,15 @@ import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
-import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  memo,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { cn } from "~/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -159,7 +167,15 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuTrigger,
+} from "./ui/menu";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -191,6 +207,7 @@ import {
   deleteSelectedThreadEntries,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
+  resolveLegacyFlatThreadList,
   isContextMenuPointerDown,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
@@ -324,6 +341,8 @@ function buildThreadJumpLabelMap(input: {
 
 interface SidebarThreadRowProps {
   thread: SidebarThreadSummary;
+  /** Set in the flat list, where no project header names the thread's project. */
+  project: SidebarProjectSnapshot | null;
   orderedProjectThreadKeys: readonly string[];
   isActive: boolean;
   openPullRequestsInRightPanel: boolean;
@@ -404,6 +423,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     openPrLink,
     onFileDropThreads,
     thread,
+    project,
   } = props;
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   const canOperatePreview = useEnvironmentScope(thread.environmentId, AuthPreviewOperateScope);
@@ -800,6 +820,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             </a>
           ) : null}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
+          {project ? (
+            <span className="flex shrink-0">
+              <ProjectFavicon project={project} className="size-3.5" />
+            </span>
+          ) : null}
           {canOperateThread && renamingThreadKey === threadKey ? (
             <input
               ref={handleRenameInputRef}
@@ -823,7 +848,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   </span>
                 }
               />
-              <TooltipPopup side="top">{thread.title}</TooltipPopup>
+              <TooltipPopup side="top">
+                {thread.title}
+                {project ? (
+                  <span className="block text-muted-foreground">{project.displayName}</span>
+                ) : null}
+              </TooltipPopup>
             </Tooltip>
           )}
         </div>
@@ -980,6 +1010,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
 interface SidebarProjectThreadListProps {
   projectKey: string;
+  /** Labels each row with its project; only the flat list passes it. */
+  projectByThreadKey?: ReadonlyMap<string, SidebarProjectSnapshot>;
   projectExpanded: boolean;
   hasOverflowingThreads: boolean;
   hiddenThreadStatus: ThreadStatusPill | null;
@@ -1036,6 +1068,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
 ) {
   const {
     projectKey,
+    projectByThreadKey,
     projectExpanded,
     hasOverflowingThreads,
     hiddenThreadStatus,
@@ -1096,6 +1129,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             <SidebarThreadRow
               key={threadKey}
               thread={thread}
+              project={projectByThreadKey?.get(threadKey) ?? null}
               orderedProjectThreadKeys={orderedProjectThreadKeys}
               isActive={activeRouteThreadKey === threadKey}
               openPullRequestsInRightPanel={openPullRequestsInRightPanel}
@@ -2875,16 +2909,20 @@ type SortableProjectHandleProps = Pick<
 >;
 
 function ProjectSortMenu({
+  threadsGroupedByProject,
   projectSortOrder,
   threadSortOrder,
   threadPreviewCount,
+  onThreadsGroupedByProjectChange,
   onProjectSortOrderChange,
   onThreadSortOrderChange,
   onThreadPreviewCountChange,
 }: {
+  threadsGroupedByProject: boolean;
   projectSortOrder: SidebarProjectSortOrder;
   threadSortOrder: SidebarThreadSortOrder;
   threadPreviewCount: SidebarThreadPreviewCount;
+  onThreadsGroupedByProjectChange: (grouped: boolean) => void;
   onProjectSortOrderChange: (sortOrder: SidebarProjectSortOrder) => void;
   onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   onThreadPreviewCountChange: (count: SidebarThreadPreviewCount) => void;
@@ -2919,24 +2957,35 @@ function ProjectSortMenu({
       </Tooltip>
       <MenuPopup align="end" side="bottom">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-            Sort projects
-          </div>
-          <MenuRadioGroup
-            value={projectSortOrder}
-            onValueChange={(value) => {
-              onProjectSortOrderChange(value as SidebarProjectSortOrder);
-            }}
+          <MenuCheckboxItem
+            checked={threadsGroupedByProject}
+            onCheckedChange={onThreadsGroupedByProjectChange}
           >
-            {(Object.entries(SIDEBAR_SORT_LABELS) as Array<[SidebarProjectSortOrder, string]>).map(
-              ([value, label]) => (
+            Group threads by project
+          </MenuCheckboxItem>
+        </MenuGroup>
+        {/* The flat list has no project order or per-project page size. */}
+        {threadsGroupedByProject ? (
+          <MenuGroup>
+            <div className="px-2 pt-2 pb-1 sm:text-xs font-medium text-muted-foreground">
+              Sort projects
+            </div>
+            <MenuRadioGroup
+              value={projectSortOrder}
+              onValueChange={(value) => {
+                onProjectSortOrderChange(value as SidebarProjectSortOrder);
+              }}
+            >
+              {(
+                Object.entries(SIDEBAR_SORT_LABELS) as Array<[SidebarProjectSortOrder, string]>
+              ).map(([value, label]) => (
                 <MenuRadioItem key={value} value={value}>
                   {label}
                 </MenuRadioItem>
-              ),
-            )}
-          </MenuRadioGroup>
-        </MenuGroup>
+              ))}
+            </MenuRadioGroup>
+          </MenuGroup>
+        ) : null}
         <MenuGroup>
           <div className="px-2 pt-2 pb-1 sm:text-xs font-medium text-muted-foreground">
             Sort threads
@@ -2956,41 +3005,43 @@ function ProjectSortMenu({
             ))}
           </MenuRadioGroup>
         </MenuGroup>
-        <MenuGroup>
-          <div className="px-2 pt-2 pb-1 text-muted-foreground sm:text-xs font-medium">
-            Visible threads
-          </div>
-          <div className="px-2 py-1">
-            <NumberField
-              aria-label="Visible thread count"
-              className="w-28"
-              max={MAX_SIDEBAR_THREAD_PREVIEW_COUNT}
-              min={MIN_SIDEBAR_THREAD_PREVIEW_COUNT}
-              onValueChange={handleThreadPreviewCountChange}
-              size="sm"
-              step={1}
-              value={threadPreviewCount}
-            >
-              <NumberFieldGroup>
-                <NumberFieldDecrement
-                  aria-label="Decrease visible thread count"
-                  className="[&_svg]:size-3.5"
-                />
-                <NumberFieldInput
-                  aria-label="Visible thread count"
-                  inputMode="numeric"
-                  onKeyDownCapture={(event) => {
-                    event.stopPropagation();
-                  }}
-                />
-                <NumberFieldIncrement
-                  aria-label="Increase visible thread count"
-                  className="[&_svg]:size-3.5"
-                />
-              </NumberFieldGroup>
-            </NumberField>
-          </div>
-        </MenuGroup>
+        {threadsGroupedByProject ? (
+          <MenuGroup>
+            <div className="px-2 pt-2 pb-1 text-muted-foreground sm:text-xs font-medium">
+              Visible threads
+            </div>
+            <div className="px-2 py-1">
+              <NumberField
+                aria-label="Visible thread count"
+                className="w-28"
+                max={MAX_SIDEBAR_THREAD_PREVIEW_COUNT}
+                min={MIN_SIDEBAR_THREAD_PREVIEW_COUNT}
+                onValueChange={handleThreadPreviewCountChange}
+                size="sm"
+                step={1}
+                value={threadPreviewCount}
+              >
+                <NumberFieldGroup>
+                  <NumberFieldDecrement
+                    aria-label="Decrease visible thread count"
+                    className="[&_svg]:size-3.5"
+                  />
+                  <NumberFieldInput
+                    aria-label="Visible thread count"
+                    inputMode="numeric"
+                    onKeyDownCapture={(event) => {
+                      event.stopPropagation();
+                    }}
+                  />
+                  <NumberFieldIncrement
+                    aria-label="Increase visible thread count"
+                    className="[&_svg]:size-3.5"
+                  />
+                </NumberFieldGroup>
+              </NumberField>
+            </div>
+          </MenuGroup>
+        ) : null}
       </MenuPopup>
     </Menu>
   );
@@ -3033,6 +3084,161 @@ function SortableProjectItem({
   );
 }
 
+/** Key for the flat list's "Show more" state among the per-project ones. */
+const LEGACY_FLAT_THREAD_LIST_KEY = "legacy-sidebar:flat-thread-list";
+type LegacyFlatThreadList = ReturnType<typeof resolveLegacyFlatThreadList<SidebarThreadSummary>>;
+const EMPTY_FLAT_THREAD_LIST_STATE: {
+  readonly flatThreadList: LegacyFlatThreadList;
+  readonly flatProjectByThreadKey: ReadonlyMap<string, SidebarProjectSnapshot>;
+} = {
+  flatThreadList: {
+    orderedThreads: [],
+    renderedThreads: [],
+    hiddenThreads: [],
+    hasOverflowingThreads: false,
+  },
+  flatProjectByThreadKey: new Map(),
+};
+
+interface SidebarFlatThreadListProps {
+  flatThreadList: LegacyFlatThreadList;
+  projectByThreadKey: ReadonlyMap<string, SidebarProjectSnapshot>;
+  isThreadListExpanded: boolean;
+  activeRouteThreadKey: string | null;
+  openPullRequestsInRightPanel: boolean;
+  threadJumpLabelByKey: ReadonlyMap<string, string>;
+  attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
+  expandThreadListForProject: (projectKey: string) => void;
+  collapseThreadListForProject: (projectKey: string) => void;
+  handleNewThread: ReturnType<typeof useNewThreadHandler>;
+  archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
+  deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  markThreadUnread: ReturnType<typeof useThreadActions>["markThreadUnread"];
+}
+
+/**
+ * Every thread across the listed projects in one list, used when "Group
+ * threads by project" is off. Each row shows its project's icon, and its
+ * title tooltip names the project, in place of a header.
+ */
+const SidebarFlatThreadList = memo(function SidebarFlatThreadList(
+  props: SidebarFlatThreadListProps,
+) {
+  const {
+    flatThreadList,
+    projectByThreadKey,
+    isThreadListExpanded,
+    activeRouteThreadKey,
+    openPullRequestsInRightPanel,
+    threadJumpLabelByKey,
+    attachThreadListAutoAnimateRef,
+    expandThreadListForProject,
+    collapseThreadListForProject,
+    handleNewThread,
+    archiveThread,
+    deleteThread,
+    markThreadUnread,
+  } = props;
+  const { orderedThreads, renderedThreads, hiddenThreads, hasOverflowingThreads } = flatThreadList;
+  const threadByKey = useMemo(
+    () =>
+      new Map(
+        orderedThreads.map(
+          (thread) =>
+            [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
+        ),
+      ),
+    [orderedThreads],
+  );
+  // Refs keep the row callbacks stable while the thread list changes.
+  const threadByKeyRef = useRef<ReadonlyMap<string, SidebarThreadSummary>>(threadByKey);
+  const projectByThreadKeyRef = useRef(projectByThreadKey);
+  useLayoutEffect(() => {
+    threadByKeyRef.current = threadByKey;
+    projectByThreadKeyRef.current = projectByThreadKey;
+  }, [projectByThreadKey, threadByKey]);
+  const resolveThreadProject = useCallback((thread: SidebarThreadSummary) => {
+    const project = projectByThreadKeyRef.current.get(
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+    );
+    const member = project?.memberProjects.find(
+      (candidate) =>
+        candidate.environmentId === thread.environmentId && candidate.id === thread.projectId,
+    );
+    return {
+      projectKey:
+        project?.projectKey ??
+        scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+      workspaceRoot: member?.workspaceRoot ?? project?.workspaceRoot ?? null,
+    };
+  }, []);
+  const threadRowActions = useLegacyThreadRowActions({
+    threadByKeyRef,
+    resolveThreadProject,
+    archiveThread,
+    deleteThread,
+    markThreadUnread,
+    handleNewThread,
+  });
+  const orderedThreadKeys = useMemo(
+    () =>
+      orderedThreads.map((thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      ),
+    [orderedThreads],
+  );
+  const hiddenLastVisitedAts = useUiStateStore(
+    useShallow((state) =>
+      hiddenThreads.map(
+        (thread) =>
+          state.threadLastVisitedAtById[
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+          ] ?? null,
+      ),
+    ),
+  );
+  const hiddenThreadStatus = useMemo(
+    () =>
+      resolveProjectStatusIndicator(
+        hiddenThreads.map((thread, index) => {
+          const lastVisitedAt = resolveThreadLastVisitedAt(
+            thread.lastVisitedAt,
+            hiddenLastVisitedAts[index] ?? undefined,
+          );
+          return resolveThreadStatusPill({
+            thread: {
+              ...thread,
+              ...(lastVisitedAt !== null && lastVisitedAt !== undefined ? { lastVisitedAt } : {}),
+            },
+          });
+        }),
+      ),
+    [hiddenLastVisitedAts, hiddenThreads],
+  );
+
+  return (
+    <SidebarProjectThreadList
+      projectKey={LEGACY_FLAT_THREAD_LIST_KEY}
+      projectByThreadKey={projectByThreadKey}
+      projectExpanded
+      hasOverflowingThreads={hasOverflowingThreads}
+      hiddenThreadStatus={hiddenThreadStatus}
+      orderedProjectThreadKeys={orderedThreadKeys}
+      renderedThreads={renderedThreads}
+      showEmptyThreadState={orderedThreads.length === 0}
+      shouldShowThreadPanel
+      isThreadListExpanded={isThreadListExpanded}
+      activeRouteThreadKey={activeRouteThreadKey}
+      openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+      threadJumpLabelByKey={threadJumpLabelByKey}
+      attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+      {...threadRowActions}
+      expandThreadListForProject={expandThreadListForProject}
+      collapseThreadListForProject={collapseThreadListForProject}
+    />
+  );
+});
+
 interface SidebarProjectsContentProps {
   showArm64IntelBuildWarning: boolean;
   arm64IntelBuildWarningDescription: string | null;
@@ -3040,6 +3246,10 @@ interface SidebarProjectsContentProps {
   desktopUpdateButtonDisabled: boolean;
   desktopUpdateActionPending: boolean;
   handleDesktopUpdateButtonClick: () => void;
+  threadsGroupedByProject: boolean;
+  flatThreadList: LegacyFlatThreadList;
+  flatProjectByThreadKey: ReadonlyMap<string, SidebarProjectSnapshot>;
+  isFlatThreadListExpanded: boolean;
   projectSortOrder: SidebarProjectSortOrder;
   threadSortOrder: SidebarThreadSortOrder;
   threadPreviewCount: SidebarThreadPreviewCount;
@@ -3083,6 +3293,10 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     desktopUpdateButtonDisabled,
     desktopUpdateActionPending,
     handleDesktopUpdateButtonClick,
+    threadsGroupedByProject,
+    flatThreadList,
+    flatProjectByThreadKey,
+    isFlatThreadListExpanded,
     projectSortOrder,
     threadSortOrder,
     threadPreviewCount,
@@ -3116,6 +3330,12 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     projectsLength,
   } = props;
 
+  const handleThreadsGroupedByProjectChange = useCallback(
+    (grouped: boolean) => {
+      updateSettings({ sidebarThreadsGroupedByProject: grouped });
+    },
+    [updateSettings],
+  );
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
       updateSettings({ sidebarProjectSortOrder: sortOrder });
@@ -3181,9 +3401,13 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       <LocalSecondaryStatus />
       <SidebarGroup>
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
-          <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
+          <span className="text-xs font-medium text-sidebar-muted-foreground/80">
+            {threadsGroupedByProject ? "Projects" : "Threads"}
+          </span>
           <div className="flex items-center gap-1">
             <ProjectSortMenu
+              threadsGroupedByProject={threadsGroupedByProject}
+              onThreadsGroupedByProjectChange={handleThreadsGroupedByProjectChange}
               projectSortOrder={projectSortOrder}
               threadSortOrder={threadSortOrder}
               threadPreviewCount={threadPreviewCount}
@@ -3210,7 +3434,25 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           </div>
         </div>
 
-        {isManualProjectSorting ? (
+        {!threadsGroupedByProject ? (
+          projectsLength > 0 ? (
+            <SidebarFlatThreadList
+              flatThreadList={flatThreadList}
+              projectByThreadKey={flatProjectByThreadKey}
+              isThreadListExpanded={isFlatThreadListExpanded}
+              activeRouteThreadKey={routeThreadKey}
+              openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+              threadJumpLabelByKey={threadJumpLabelByKey}
+              attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+              expandThreadListForProject={expandThreadListForProject}
+              collapseThreadListForProject={collapseThreadListForProject}
+              handleNewThread={handleNewThread}
+              archiveThread={archiveThread}
+              deleteThread={deleteThread}
+              markThreadUnread={markThreadUnread}
+            />
+          ) : null
+        ) : isManualProjectSorting ? (
           <DndContext
             sensors={projectDnDSensors}
             collisionDetection={projectCollisionDetection}
@@ -3306,6 +3548,7 @@ export default function LegacySidebar() {
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
+  const sidebarThreadsGroupedByProject = useClientSettings((s) => s.sidebarThreadsGroupedByProject);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
   const { archiveThread, deleteThread, markThreadUnread } = useThreadActions();
@@ -3615,44 +3858,83 @@ export default function LegacySidebar() {
     visibleThreads,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
+  const isFlatThreadListExpanded = expandedThreadListsByProject.has(LEGACY_FLAT_THREAD_LIST_KEY);
+  const { flatThreadList, flatProjectByThreadKey } = useMemo(() => {
+    if (sidebarThreadsGroupedByProject) {
+      return EMPTY_FLAT_THREAD_LIST_STATE;
+    }
+    const projectByThreadKey = new Map<string, SidebarProjectSnapshot>();
+    const threads: SidebarThreadSummary[] = [];
+    for (const project of sortedProjects) {
+      for (const thread of threadsByProjectKey.get(project.projectKey) ?? []) {
+        projectByThreadKey.set(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          project,
+        );
+        threads.push(thread);
+      }
+    }
+    return {
+      flatThreadList: resolveLegacyFlatThreadList({
+        threads,
+        sortOrder: sidebarThreadSortOrder,
+        expanded: isFlatThreadListExpanded,
+      }),
+      flatProjectByThreadKey: projectByThreadKey,
+    };
+  }, [
+    isFlatThreadListExpanded,
+    sidebarThreadSortOrder,
+    sidebarThreadsGroupedByProject,
+    sortedProjects,
+    threadsByProjectKey,
+  ]);
   const visibleSidebarThreadKeys = useMemo(
     () =>
-      sortedProjects.flatMap((project) => {
-        const projectThreads = sortThreads(
-          (threadsByProjectKey.get(project.projectKey) ?? []).filter(
-            (thread) => thread.archivedAt === null,
-          ),
-          sidebarThreadSortOrder,
-        );
-        const projectExpanded = resolveProjectExpanded(
-          projectExpandedById,
-          projectExpansionPreferenceKeys(project),
-        );
-        const activeThreadKey = routeThreadKey ?? undefined;
-        const pinnedCollapsedThread =
-          !projectExpanded && activeThreadKey
-            ? (projectThreads.find(
-                (thread) =>
-                  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-                  activeThreadKey,
-              ) ?? null)
-            : null;
-        const shouldShowThreadPanel = projectExpanded || pinnedCollapsedThread !== null;
-        if (!shouldShowThreadPanel) {
-          return [];
-        }
-        const isThreadListExpanded = expandedThreadListsByProject.has(project.projectKey);
-        const hasOverflowingThreads = projectThreads.length > sidebarThreadPreviewCount;
-        const previewThreads =
-          isThreadListExpanded || !hasOverflowingThreads
-            ? projectThreads
-            : projectThreads.slice(0, sidebarThreadPreviewCount);
-        const renderedThreads = pinnedCollapsedThread ? [pinnedCollapsedThread] : previewThreads;
-        return renderedThreads.map((thread) =>
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        );
-      }),
+      !sidebarThreadsGroupedByProject
+        ? flatThreadList.renderedThreads.map((thread) =>
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          )
+        : sortedProjects.flatMap((project) => {
+            const projectThreads = sortThreads(
+              (threadsByProjectKey.get(project.projectKey) ?? []).filter(
+                (thread) => thread.archivedAt === null,
+              ),
+              sidebarThreadSortOrder,
+            );
+            const projectExpanded = resolveProjectExpanded(
+              projectExpandedById,
+              projectExpansionPreferenceKeys(project),
+            );
+            const activeThreadKey = routeThreadKey ?? undefined;
+            const pinnedCollapsedThread =
+              !projectExpanded && activeThreadKey
+                ? (projectThreads.find(
+                    (thread) =>
+                      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
+                      activeThreadKey,
+                  ) ?? null)
+                : null;
+            const shouldShowThreadPanel = projectExpanded || pinnedCollapsedThread !== null;
+            if (!shouldShowThreadPanel) {
+              return [];
+            }
+            const isThreadListExpanded = expandedThreadListsByProject.has(project.projectKey);
+            const hasOverflowingThreads = projectThreads.length > sidebarThreadPreviewCount;
+            const previewThreads =
+              isThreadListExpanded || !hasOverflowingThreads
+                ? projectThreads
+                : projectThreads.slice(0, sidebarThreadPreviewCount);
+            const renderedThreads = pinnedCollapsedThread
+              ? [pinnedCollapsedThread]
+              : previewThreads;
+            return renderedThreads.map((thread) =>
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+            );
+          }),
     [
+      flatThreadList,
+      sidebarThreadsGroupedByProject,
       sidebarThreadSortOrder,
       sidebarThreadPreviewCount,
       expandedThreadListsByProject,
@@ -3946,6 +4228,10 @@ export default function LegacySidebar() {
         desktopUpdateButtonDisabled={desktopUpdateButtonDisabled}
         desktopUpdateActionPending={desktopUpdateActionPending}
         handleDesktopUpdateButtonClick={handleDesktopUpdateButtonClick}
+        threadsGroupedByProject={sidebarThreadsGroupedByProject}
+        flatThreadList={flatThreadList}
+        flatProjectByThreadKey={flatProjectByThreadKey}
+        isFlatThreadListExpanded={isFlatThreadListExpanded}
         projectSortOrder={sidebarProjectSortOrder}
         threadSortOrder={sidebarThreadSortOrder}
         threadPreviewCount={sidebarThreadPreviewCount}
