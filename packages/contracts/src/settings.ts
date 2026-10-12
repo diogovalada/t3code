@@ -488,8 +488,8 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
   ),
-  // Legacy sidebar only: threads nest under their projects. Off lists every
-  // thread in one list, in the thread sort order.
+  // Legacy sidebar only: threads nest under their projects. When false, every
+  // thread shows in a single list, in the thread sort order.
   sidebarThreadsGroupedByProject: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),

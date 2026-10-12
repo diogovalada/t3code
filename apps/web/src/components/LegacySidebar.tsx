@@ -781,6 +781,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         onContextMenu={handleRowContextMenu}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          {project ? (
+            <span className="flex shrink-0">
+              <ProjectFavicon project={project} className="size-3.5" />
+            </span>
+          ) : null}
           {prStatus && pr && (
             <Tooltip>
               <TooltipTrigger
@@ -821,11 +826,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             </a>
           ) : null}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
-          {project ? (
-            <span className="flex shrink-0">
-              <ProjectFavicon project={project} className="size-3.5" />
-            </span>
-          ) : null}
           {canOperateThread && renamingThreadKey === threadKey ? (
             <input
               ref={handleRenameInputRef}
@@ -1108,8 +1108,11 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   const showMoreButtonRender = useMemo(() => <button type="button" />, []);
   const showLessButtonRender = useMemo(() => <button type="button" />, []);
 
+  // The flat list has no project header for a nested list's guide line to hang from.
+  const ThreadList = projectByThreadKey ? SidebarMenu : SidebarMenuSub;
+
   return (
-    <SidebarMenuSub
+    <ThreadList
       ref={attachThreadListAutoAnimateRef}
       className="mx-0.5 my-0 w-full translate-x-0 overflow-hidden sm:mx-1"
     >
@@ -1190,7 +1193,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
           </SidebarMenuSubButton>
         </SidebarMenuSubItem>
       )}
-    </SidebarMenuSub>
+    </ThreadList>
   );
 });
 
@@ -3085,12 +3088,7 @@ function SortableProjectItem({
   );
 }
 
-/** The flat list's "New thread" button: pick the project in the command palette. */
-function openNewThreadInCommandPalette() {
-  openCommandPalette({ open: "new-thread-in" });
-}
-
-/** Key for the flat list's "Show more" state among the per-project ones. */
+/** The flat list's "Show more" key in expandedThreadListsByProject, next to the project keys. */
 const LEGACY_FLAT_THREAD_LIST_KEY = "legacy-sidebar:flat-thread-list";
 type LegacyFlatThreadList = ReturnType<typeof resolveLegacyFlatThreadList<SidebarThreadSummary>>;
 const EMPTY_FLAT_THREAD_LIST_STATE: {
@@ -3336,6 +3334,14 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     projectsLength,
   } = props;
 
+  const { isMobile, setOpenMobile } = useSidebar();
+  // The flat list's New thread button: pick the project in the command palette.
+  const handleNewThreadClick = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+    openCommandPalette({ open: "new-thread-in" });
+  }, [isMobile, setOpenMobile]);
   const handleThreadsGroupedByProjectChange = useCallback(
     (grouped: boolean) => {
       updateSettings({ sidebarThreadsGroupedByProject: grouped });
@@ -3411,6 +3417,24 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             {threadsGroupedByProject ? "Projects" : "Threads"}
           </span>
           <div className="flex items-center gap-1">
+            {/* Project headers carry the new-thread buttons; the flat list has none. */}
+            {threadsGroupedByProject ? null : (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="ghost-muted"
+                      aria-label="New thread"
+                      onClick={handleNewThreadClick}
+                    />
+                  }
+                >
+                  <SquarePenIcon className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup side="right">New thread</TooltipPopup>
+              </Tooltip>
+            )}
             <ProjectSortMenu
               threadsGroupedByProject={threadsGroupedByProject}
               onThreadsGroupedByProjectChange={handleThreadsGroupedByProjectChange}
@@ -3421,24 +3445,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               onThreadSortOrderChange={handleThreadSortOrderChange}
               onThreadPreviewCountChange={handleThreadPreviewCountChange}
             />
-            {/* Project headers carry the new-thread buttons; the flat list has none. */}
-            {threadsGroupedByProject ? null : (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant="ghost-muted"
-                      aria-label="New thread"
-                      onClick={openNewThreadInCommandPalette}
-                    />
-                  }
-                >
-                  <SquarePenIcon className="size-3.5" />
-                </TooltipTrigger>
-                <TooltipPopup side="right">New thread</TooltipPopup>
-              </Tooltip>
-            )}
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -3913,61 +3919,58 @@ export default function LegacySidebar() {
     sortedProjects,
     threadsByProjectKey,
   ]);
-  const visibleSidebarThreadKeys = useMemo(
-    () =>
-      !sidebarThreadsGroupedByProject
-        ? flatThreadList.renderedThreads.map((thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-          )
-        : sortedProjects.flatMap((project) => {
-            const projectThreads = sortThreads(
-              (threadsByProjectKey.get(project.projectKey) ?? []).filter(
-                (thread) => thread.archivedAt === null,
-              ),
-              sidebarThreadSortOrder,
-            );
-            const projectExpanded = resolveProjectExpanded(
-              projectExpandedById,
-              projectExpansionPreferenceKeys(project),
-            );
-            const activeThreadKey = routeThreadKey ?? undefined;
-            const pinnedCollapsedThread =
-              !projectExpanded && activeThreadKey
-                ? (projectThreads.find(
-                    (thread) =>
-                      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-                      activeThreadKey,
-                  ) ?? null)
-                : null;
-            const shouldShowThreadPanel = projectExpanded || pinnedCollapsedThread !== null;
-            if (!shouldShowThreadPanel) {
-              return [];
-            }
-            const isThreadListExpanded = expandedThreadListsByProject.has(project.projectKey);
-            const hasOverflowingThreads = projectThreads.length > sidebarThreadPreviewCount;
-            const previewThreads =
-              isThreadListExpanded || !hasOverflowingThreads
-                ? projectThreads
-                : projectThreads.slice(0, sidebarThreadPreviewCount);
-            const renderedThreads = pinnedCollapsedThread
-              ? [pinnedCollapsedThread]
-              : previewThreads;
-            return renderedThreads.map((thread) =>
-              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-            );
-          }),
-    [
-      flatThreadList,
-      sidebarThreadsGroupedByProject,
-      sidebarThreadSortOrder,
-      sidebarThreadPreviewCount,
-      expandedThreadListsByProject,
-      projectExpandedById,
-      routeThreadKey,
-      sortedProjects,
-      threadsByProjectKey,
-    ],
-  );
+  const visibleSidebarThreadKeys = useMemo(() => {
+    if (!sidebarThreadsGroupedByProject) {
+      return flatThreadList.renderedThreads.map((thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      );
+    }
+    return sortedProjects.flatMap((project) => {
+      const projectThreads = sortThreads(
+        (threadsByProjectKey.get(project.projectKey) ?? []).filter(
+          (thread) => thread.archivedAt === null,
+        ),
+        sidebarThreadSortOrder,
+      );
+      const projectExpanded = resolveProjectExpanded(
+        projectExpandedById,
+        projectExpansionPreferenceKeys(project),
+      );
+      const activeThreadKey = routeThreadKey ?? undefined;
+      const pinnedCollapsedThread =
+        !projectExpanded && activeThreadKey
+          ? (projectThreads.find(
+              (thread) =>
+                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
+                activeThreadKey,
+            ) ?? null)
+          : null;
+      const shouldShowThreadPanel = projectExpanded || pinnedCollapsedThread !== null;
+      if (!shouldShowThreadPanel) {
+        return [];
+      }
+      const isThreadListExpanded = expandedThreadListsByProject.has(project.projectKey);
+      const hasOverflowingThreads = projectThreads.length > sidebarThreadPreviewCount;
+      const previewThreads =
+        isThreadListExpanded || !hasOverflowingThreads
+          ? projectThreads
+          : projectThreads.slice(0, sidebarThreadPreviewCount);
+      const renderedThreads = pinnedCollapsedThread ? [pinnedCollapsedThread] : previewThreads;
+      return renderedThreads.map((thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      );
+    });
+  }, [
+    flatThreadList,
+    sidebarThreadsGroupedByProject,
+    sidebarThreadSortOrder,
+    sidebarThreadPreviewCount,
+    expandedThreadListsByProject,
+    projectExpandedById,
+    routeThreadKey,
+    sortedProjects,
+    threadsByProjectKey,
+  ]);
   const threadJumpCommandByKey = useMemo(() => {
     const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
     for (const [visibleThreadIndex, threadKey] of visibleSidebarThreadKeys.entries()) {
