@@ -2962,6 +2962,7 @@ function ProjectSortMenu({
       <MenuPopup align="end" side="bottom">
         <MenuGroup>
           <MenuCheckboxItem
+            variant="switch"
             checked={threadsGroupedByProject}
             onCheckedChange={onThreadsGroupedByProjectChange}
           >
